@@ -1,113 +1,101 @@
 import streamlit as st
-import os
-from PIL import Image
+from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
-import zipfile
-import io
-
-# ベースフォルダ
-BASE_DIR = "mice_data"
-os.makedirs(BASE_DIR, exist_ok=True)
+import pandas as pd
+import io, os, zipfile
+from PIL import Image
 
 st.set_page_config(page_title="マウス耳写真管理", layout="wide")
-
 st.title("🐭 マウス耳写真管理アプリ")
 
-# --- マウス登録・削除 ---
-st.subheader("🧬 マウス登録")
+# Google Sheets接続（個人認証だけでOK）
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-mouse_list_file = os.path.join(BASE_DIR, "mice_list.txt")
+# データを読み込み（存在しない場合は空データ作成）
+df = conn.read(worksheet="Sheet1", ttl=5)
+if df.empty:
+    df = pd.DataFrame(columns=["mouse_id", "remark", "date_added"])
 
-# マウスリストの読み込み
-if os.path.exists(mouse_list_file):
-    with open(mouse_list_file, "r") as f:
-        mice = [line.strip() for line in f.readlines()]
-else:
-    mice = []
+# --- 新規登録 ---
+st.subheader("🧬 新規マウス登録")
+new_mouse = st.text_input("マウス番号", placeholder="例: 001")
+remark = st.text_input("備考", placeholder="例: 系統・特徴など")
 
-col1, col2 = st.columns([2, 1])
+if st.button("登録"):
+    if new_mouse and new_mouse not in df["mouse_id"].values:
+        new_row = pd.DataFrame({
+            "mouse_id": [new_mouse],
+            "remark": [remark],
+            "date_added": [datetime.now().strftime("%Y-%m-%d")]
+        })
+        df = pd.concat([df, new_row], ignore_index=True)
+        conn.update(worksheet="Sheet1", data=df)
+        st.success(f"マウス {new_mouse} を登録しました！")
+        st.experimental_rerun()
+    elif new_mouse in df["mouse_id"].values:
+        st.warning("すでに登録済みです。")
 
-with col1:
-    new_mouse = st.text_input("新しいマウス番号を入力", placeholder="例: 001")
-    if st.button("登録"):
-        if new_mouse and new_mouse not in mice:
-            mice.append(new_mouse)
-            with open(mouse_list_file, "a") as f:
-                f.write(new_mouse + "\n")
-            st.success(f"マウス {new_mouse} を登録しました")
-        else:
-            st.warning("すでに存在するか、入力が空です。")
-
-with col2:
-    delete_mouse = st.selectbox("削除するマウスを選択", [""] + mice)
-    if st.button("削除"):
-        if delete_mouse:
-            mice.remove(delete_mouse)
-            with open(mouse_list_file, "w") as f:
-                f.writelines([m + "\n" for m in mice])
-            st.warning(f"マウス {delete_mouse} を削除しました")
+# --- 削除 ---
+delete_mouse = st.selectbox("削除するマウスを選択", [""] + list(df["mouse_id"]))
+if st.button("削除"):
+    if delete_mouse:
+        df = df[df["mouse_id"] != delete_mouse]
+        conn.update(worksheet="Sheet1", data=df)
+        st.warning(f"マウス {delete_mouse} を削除しました。")
+        st.experimental_rerun()
 
 st.divider()
 
-# --- マウス写真アップロード ---
-st.subheader("📸 写真アップロード")
+# --- 一覧と写真アップロード ---
+st.subheader("📋 登録済みマウス一覧")
 
-if mice:
-    selected_mouse = st.selectbox("マウス番号を選択", mice)
-
-    # 今日の日付フォルダ
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today_dir = os.path.join(BASE_DIR, today_str)
+if df.empty:
+    st.info("まだ登録されていません。")
+else:
+    today = datetime.now().strftime("%Y-%m-%d")
+    base_dir = "mice_data"
+    os.makedirs(base_dir, exist_ok=True)
+    today_dir = os.path.join(base_dir, today)
     os.makedirs(today_dir, exist_ok=True)
 
-    # マウス個別フォルダ
-    mouse_folder = os.path.join(today_dir, selected_mouse)
-    os.makedirs(mouse_folder, exist_ok=True)
+    for _, row in df.iterrows():
+        mid = row["mouse_id"]
+        with st.expander(f"🐭 マウス {mid}"):
+            st.write(f"📅 登録日: {row['date_added']}")
+            st.write(f"📝 備考: {row['remark']}")
 
-    left_col, right_col = st.columns(2)
+            mdir = os.path.join(today_dir, mid)
+            os.makedirs(mdir, exist_ok=True)
+            colL, colR = st.columns(2)
 
-    for side, col in zip(["左", "右"], [left_col, right_col]):
-        with col:
-            st.markdown(f"### {side}耳")
-            uploaded = st.file_uploader(f"{side}耳の写真をアップロード", type=["jpg", "jpeg", "png"], key=f"{selected_mouse}_{side}")
-            if uploaded:
-                file_path = os.path.join(mouse_folder, f"{selected_mouse}_{side}.jpg")
-                img = Image.open(uploaded)
-                img.save(file_path)
-                st.image(img, caption=f"{selected_mouse}_{side}.jpg", use_container_width=True)
-                st.success(f"{side}耳の写真を保存しました！")
+            for side, col in zip(["左", "右"], [colL, colR]):
+                with col:
+                    up = st.file_uploader(f"{side}耳", type=["jpg","jpeg","png"], key=f"{mid}_{side}")
+                    if up:
+                        path = os.path.join(mdir, f"{mid}_{side}.jpg")
+                        img = Image.open(up)
+                        img.save(path)
+                        st.image(img, caption=f"{mid}_{side}.jpg", use_container_width=True)
+                        st.success(f"{side}耳を保存しました！")
 
-    # 両耳が揃っているか確認
-    left_file = os.path.join(mouse_folder, f"{selected_mouse}_左.jpg")
-    right_file = os.path.join(mouse_folder, f"{selected_mouse}_右.jpg")
-
-    if os.path.exists(left_file) and os.path.exists(right_file):
-        st.success("✅ 両耳の写真が揃いました！")
-else:
-    st.info("まずマウスを登録してください。")
+            left = os.path.join(mdir, f"{mid}_左.jpg")
+            right = os.path.join(mdir, f"{mid}_右.jpg")
+            if os.path.exists(left) and os.path.exists(right):
+                st.success("✅ 両耳そろいました！")
 
 st.divider()
 
-# --- ZIP ダウンロード ---
-st.subheader("📦 本日分のデータをまとめてダウンロード")
-
-today_str = datetime.now().strftime("%Y-%m-%d")
-today_dir = os.path.join(BASE_DIR, today_str)
+# --- ZIPダウンロード ---
+st.subheader("📦 本日分をまとめてダウンロード")
 
 if os.path.exists(today_dir) and os.listdir(today_dir):
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(today_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                zipf.write(file_path, os.path.relpath(file_path, today_dir))
-    zip_buffer.seek(0)
-
-    st.download_button(
-        label=f"📥 {today_str} の写真をZIPでダウンロード",
-        data=zip_buffer,
-        file_name=f"mice_{today_str}.zip",
-        mime="application/zip"
-    )
+            for f in files:
+                path = os.path.join(root, f)
+                zf.write(path, os.path.relpath(path, today_dir))
+    buffer.seek(0)
+    st.download_button("📥 今日のZIPをダウンロード", buffer, file_name=f"mice_{today}.zip")
 else:
-    st.info("まだ本日の写真データはありません。")
+    st.info("今日の写真データはまだありません。")
