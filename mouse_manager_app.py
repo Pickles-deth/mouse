@@ -1,10 +1,13 @@
 import streamlit as st
 import os
 from PIL import Image
+from datetime import datetime
+import zipfile
+import io
 
-# 保存ディレクトリ
-SAVE_DIR = "mice_data"
-os.makedirs(SAVE_DIR, exist_ok=True)
+# ベースフォルダ
+BASE_DIR = "mice_data"
+os.makedirs(BASE_DIR, exist_ok=True)
 
 st.set_page_config(page_title="マウス耳写真管理", layout="wide")
 
@@ -13,7 +16,7 @@ st.title("🐭 マウス耳写真管理アプリ")
 # --- マウス登録・削除 ---
 st.subheader("🧬 マウス登録")
 
-mouse_list_file = os.path.join(SAVE_DIR, "mice_list.txt")
+mouse_list_file = os.path.join(BASE_DIR, "mice_list.txt")
 
 # マウスリストの読み込み
 if os.path.exists(mouse_list_file):
@@ -51,15 +54,23 @@ st.subheader("📸 写真アップロード")
 
 if mice:
     selected_mouse = st.selectbox("マウス番号を選択", mice)
+
+    # 今日の日付フォルダ
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_dir = os.path.join(BASE_DIR, today_str)
+    os.makedirs(today_dir, exist_ok=True)
+
+    # マウス個別フォルダ
+    mouse_folder = os.path.join(today_dir, selected_mouse)
+    os.makedirs(mouse_folder, exist_ok=True)
+
     left_col, right_col = st.columns(2)
 
     for side, col in zip(["左", "右"], [left_col, right_col]):
         with col:
             st.markdown(f"### {side}耳")
-            uploaded = st.file_uploader(f"{side}耳の写真をアップロード", type=["jpg", "jpeg", "png"], key=side)
+            uploaded = st.file_uploader(f"{side}耳の写真をアップロード", type=["jpg", "jpeg", "png"], key=f"{selected_mouse}_{side}")
             if uploaded:
-                mouse_folder = os.path.join(SAVE_DIR, selected_mouse)
-                os.makedirs(mouse_folder, exist_ok=True)
                 file_path = os.path.join(mouse_folder, f"{selected_mouse}_{side}.jpg")
                 img = Image.open(uploaded)
                 img.save(file_path)
@@ -67,7 +78,6 @@ if mice:
                 st.success(f"{side}耳の写真を保存しました！")
 
     # 両耳が揃っているか確認
-    mouse_folder = os.path.join(SAVE_DIR, selected_mouse)
     left_file = os.path.join(mouse_folder, f"{selected_mouse}_左.jpg")
     right_file = os.path.join(mouse_folder, f"{selected_mouse}_右.jpg")
 
@@ -75,3 +85,29 @@ if mice:
         st.success("✅ 両耳の写真が揃いました！")
 else:
     st.info("まずマウスを登録してください。")
+
+st.divider()
+
+# --- ZIP ダウンロード ---
+st.subheader("📦 本日分のデータをまとめてダウンロード")
+
+today_str = datetime.now().strftime("%Y-%m-%d")
+today_dir = os.path.join(BASE_DIR, today_str)
+
+if os.path.exists(today_dir) and os.listdir(today_dir):
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(today_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                zipf.write(file_path, os.path.relpath(file_path, today_dir))
+    zip_buffer.seek(0)
+
+    st.download_button(
+        label=f"📥 {today_str} の写真をZIPでダウンロード",
+        data=zip_buffer,
+        file_name=f"mice_{today_str}.zip",
+        mime="application/zip"
+    )
+else:
+    st.info("まだ本日の写真データはありません。")
